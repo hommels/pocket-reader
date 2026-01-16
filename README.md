@@ -2,6 +2,8 @@
 
 A Chrome extension that reads web page content aloud using [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) - a lightweight text-to-speech model that runs on your CPU.
 
+![](./images/demo.png)
+
 ## Features
 
 - Read any web page content aloud
