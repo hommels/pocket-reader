@@ -68,6 +68,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 });
 
+// Create context menus on extension install/update
+chrome.runtime.onInstalled.addListener(() => {
+  // Menu item for selected text
+  chrome.contextMenus.create({
+    id: 'read-selection',
+    title: 'Read selected text',
+    contexts: ['selection']
+  });
+
+  // Menu item for reading from cursor position
+  chrome.contextMenus.create({
+    id: 'read-from-here',
+    title: 'Read from here',
+    contexts: ['page']
+  });
+});
+
 /**
  * Forward stop command to the active tab's content script
  */
@@ -78,6 +95,53 @@ function stopPlayback() {
     });
   }
 }
+
+/**
+ * Handle context menu clicks
+ */
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  // Get saved voice and speed preferences
+  const { voice = 'alba', speed = 1.0 } = await chrome.storage.local.get(['voice', 'speed']);
+
+  if (info.menuItemId === 'read-selection') {
+    // Read selected text
+    const selectedText = info.selectionText;
+
+    if (!selectedText || selectedText.trim().length === 0) {
+      return;
+    }
+
+    // Stop any current playback first
+    await chrome.tabs.sendMessage(tab.id, { action: 'stop' }).catch(() => { });
+
+    // Small delay to ensure stop completes
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Read the selected text
+    chrome.tabs.sendMessage(tab.id, {
+      action: 'readText',
+      text: selectedText,
+      voice: voice,
+      speed: speed,
+      fromContextMenu: true
+    });
+
+  } else if (info.menuItemId === 'read-from-here') {
+    // Stop any current playback first
+    await chrome.tabs.sendMessage(tab.id, { action: 'stop' }).catch(() => { });
+
+    // Small delay to ensure stop completes
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    // Scan and read from current page position
+    // The content script will figure out where to start based on scroll position
+    chrome.tabs.sendMessage(tab.id, {
+      action: 'readFromHere',
+      voice: voice,
+      speed: speed
+    });
+  }
+});
 
 /**
  * Handle keyboard commands

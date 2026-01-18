@@ -673,11 +673,96 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   } else if (message.action === 'clearSavedPosition') {
     clearReadingPosition();
     sendResponse({ status: 'cleared' });
+  } else if (message.action === 'readFromHere') {
+    // Read from current scroll position to end of page
+    handleReadFromHere(message.voice, message.speed);
+    sendResponse({ success: true });
   }
 
   // Return true to indicate async response
   return true;
 });
+
+// Store the last right-click position for "read from here"
+let lastContextMenuPosition = { x: 0, y: 0 };
+
+// Capture right-click position for "read from here" functionality
+document.addEventListener('contextmenu', (e) => {
+  lastContextMenuPosition = {
+    x: e.clientX,
+    y: e.clientY
+  };
+}, true);
+
+/**
+ * Read from right-click position to end of page
+ * Finds the first readable paragraph at or below the click position
+ */
+async function handleReadFromHere(voice, speed) {
+  try {
+    // Extract all readable paragraphs from page
+    const paragraphs = extractReadableElements();
+
+    if (!paragraphs || paragraphs.length === 0) {
+      notifyExtension({
+        action: 'error',
+        text: 'No readable content found on this page'
+      });
+      return;
+    }
+
+    // Use the last right-click position to find the nearest paragraph
+    const clickY = lastContextMenuPosition.y;
+    let startIndex = 0;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < paragraphs.length; i++) {
+      if (paragraphs[i].element) {
+        const rect = paragraphs[i].element.getBoundingClientRect();
+
+        // Calculate distance from click position to element
+        // Prefer elements at or below the click position
+        const elementTop = rect.top;
+        const elementBottom = rect.bottom;
+
+        let distance;
+        if (clickY >= elementTop && clickY <= elementBottom) {
+          // Click is inside this element - perfect match
+          distance = 0;
+        } else if (elementTop >= clickY) {
+          // Element is below click - use distance from click to top of element
+          distance = elementTop - clickY;
+        } else {
+          // Element is above click - penalize heavily but still consider
+          distance = (clickY - elementBottom) + 10000;
+        }
+
+        if (distance < minDistance) {
+          minDistance = distance;
+          startIndex = i;
+        }
+
+        // If we found a perfect match (clicked inside element), use it
+        if (distance === 0) {
+          break;
+        }
+      }
+    }
+
+    // Clear any existing reading position for this page
+    clearReadingPosition();
+
+    // Start reading from this position with highlighting
+    await readParagraphsFromIndex(paragraphs, voice, startIndex, speed, true);
+
+  } catch (error) {
+    console.error('Error in readFromHere:', error);
+    notifyExtension({
+      action: 'error',
+      text: 'Failed to start reading'
+    });
+  }
+}
 
 // Log that content script is loaded
 console.log('Pocket Reader content script loaded');
