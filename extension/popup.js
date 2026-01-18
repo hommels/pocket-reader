@@ -58,10 +58,21 @@ async function init() {
   // Listen for messages from content script
   chrome.runtime.onMessage.addListener(handleContentMessage);
 
-  // Check current playback state
-  const { playing } = await chrome.storage.local.get('playing');
-  if (playing) {
-    setPlayingState(true);
+  // Check current playback state by querying the content script's audio element
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tab?.id) {
+      const state = await chrome.tabs.sendMessage(tab.id, { action: 'getPlaybackState' });
+      if (state?.isPlaying) {
+        setPlayingState(true);
+      } else if (state?.isPaused) {
+        setPlayingState(true);
+        // Show paused state - button should allow resume
+      }
+    }
+  } catch (e) {
+    // Content script not available or tab doesn't exist - assume not playing
+    console.debug('Could not query playback state:', e.message);
   }
 
   // Auto-scan on open if server is connected
@@ -444,8 +455,6 @@ function setPlayingState(playing) {
   if (playing) {
     progressContainer.classList.remove('hidden');
   }
-
-  chrome.storage.local.set({ playing: playing });
 }
 
 /**

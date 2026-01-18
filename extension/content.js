@@ -9,6 +9,7 @@
 let currentAudio = null;
 let shouldStop = false;
 let isPaused = false;
+let isInPlaybackSession = false; // Track if we're in an active reading session
 let playbackSpeed = 1.0;
 let currentParagraphIndex = 0;
 let totalParagraphs = 0;
@@ -17,6 +18,28 @@ let pendingAudioUrls = []; // Track URLs to clean up on stop
 // Pending playback state for autoplay policy retry
 let pendingPlayback = null; // { audioBlob, onReadyToPrefetch, resolve, reject }
 let playOverlayElement = null;
+
+// Pre-create Audio element to avoid autoplay policy issues
+// This element will be reused for all playback
+function ensureAudioElement() {
+  if (!currentAudio) {
+    currentAudio = new Audio();
+    // Don't pre-set a source - just create the element
+    // Setting a source here can trigger errors when switching sources later
+  }
+  return currentAudio;
+}
+
+/**
+ * Clear audio element event handlers to prevent stale callbacks
+ */
+function clearAudioHandlers() {
+  if (currentAudio) {
+    currentAudio.onended = null;
+    currentAudio.onerror = null;
+    currentAudio.ontimeupdate = null;
+  }
+}
 
 // DOM element tracking for highlighting
 let readableElements = []; // Array of DOM elements that can be read
@@ -553,7 +576,11 @@ function playAudioBlob(audioBlob, onReadyToPrefetch) {
 
     const audioUrl = URL.createObjectURL(audioBlob);
     pendingAudioUrls.push(audioUrl);
-    currentAudio = new Audio(audioUrl);
+
+    // Ensure we have an Audio element (reuse across paragraphs)
+    ensureAudioElement();
+
+    currentAudio.src = audioUrl;
     currentAudio.playbackRate = playbackSpeed;
 
     let prefetchTriggered = false;
@@ -576,21 +603,24 @@ function playAudioBlob(audioBlob, onReadyToPrefetch) {
     currentAudio.onended = () => {
       URL.revokeObjectURL(audioUrl);
       pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
-      currentAudio = null;
+      // Don't set currentAudio to null - reuse it for next paragraph
       resolve({ stopped: false });
     };
 
-    currentAudio.onerror = (e) => {
+    currentAudio.onerror = () => {
       URL.revokeObjectURL(audioUrl);
       pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
-      currentAudio = null;
-      reject(new Error('Audio playback error'));
+      // Don't report error if we intentionally stopped playback
+      if (shouldStop) {
+        resolve({ stopped: true });
+      } else {
+        reject(new Error('Audio playback error'));
+      }
     };
 
     currentAudio.play().catch((error) => {
       URL.revokeObjectURL(audioUrl);
       pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
-      currentAudio = null;
       
       // Check if this is an autoplay policy error
       if (error.name === 'NotAllowedError') {
@@ -671,6 +701,7 @@ async function getParagraphs(text) {
 async function readParagraphsFromIndex(paragraphs, voice, startIndex = 0, speed = 1.0, useHighlighting = false) {
   shouldStop = false;
   isPaused = false;
+  isInPlaybackSession = true;
   playbackSpeed = speed;
   pendingAudioUrls = [];
   totalParagraphs = paragraphs.length;
@@ -783,10 +814,12 @@ async function readParagraphsFromIndex(paragraphs, voice, startIndex = 0, speed 
     if (!shouldStop) {
       // Clear saved position when finished
       clearReadingPosition();
+      isInPlaybackSession = false;
       notifyExtension({ action: 'complete' });
     }
   } catch (error) {
     removeHighlight();
+    isInPlaybackSession = false;
     console.error('TTS error:', error);
     notifyExtension({ action: 'error', text: error.message });
   }
@@ -821,10 +854,13 @@ async function readText(text, voice, speed = 1.0) {
 function stopPlayback() {
   shouldStop = true;
   isPaused = false;
+  isInPlaybackSession = false;
 
   if (currentAudio) {
+    // Clear handlers before modifying to prevent error callbacks
+    clearAudioHandlers();
     currentAudio.pause();
-    currentAudio.src = '';
+    // Just null out the reference - don't modify src to avoid "Invalid URI" warning
     currentAudio = null;
   }
 
@@ -954,10 +990,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     sendResponse({ status: 'speed_set', speed: playbackSpeed });
   } else if (message.action === 'getPlaybackState') {
+    // Use isInPlaybackSession flag for reliable state detection
+    // The audio element may exist but be primed with silent audio when not playing
     sendResponse({
-      isPlaying: currentAudio !== null && !isPaused,
-      isPaused: isPaused,
-      isStopped: currentAudio === null
+      isPlaying: isInPlaybackSession && !isPaused,
+      isPaused: isInPlaybackSession && isPaused,
+      isStopped: !isInPlaybackSession
     });
   } else if (message.action === 'getSavedPosition') {
     const url = getNormalizedUrl();
