@@ -21,11 +21,13 @@ let playOverlayElement = null;
 // DOM element tracking for highlighting
 let readableElements = []; // Array of DOM elements that can be read
 let currentHighlightedElement = null;
+let paragraphControlButton = null; // Pause/play button on highlighted paragraph
 
 // CSS class for highlighting
 const HIGHLIGHT_CLASS = 'pocket-reader-highlight';
 const HIGHLIGHT_STYLE_ID = 'pocket-reader-styles';
 const PLAY_OVERLAY_ID = 'pocket-reader-play-overlay';
+const PARAGRAPH_CONTROL_ID = 'pocket-reader-paragraph-control';
 
 /**
  * Inject highlight styles into the page
@@ -42,6 +44,37 @@ function injectHighlightStyles() {
       outline-offset: 2px !important;
       border-radius: 4px !important;
       transition: background-color 0.2s ease, outline 0.2s ease !important;
+      position: relative !important;
+    }
+    #${PARAGRAPH_CONTROL_ID} {
+      position: absolute !important;
+      top: -12px !important;
+      right: -12px !important;
+      width: 28px !important;
+      height: 28px !important;
+      border-radius: 50% !important;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      border: 2px solid white !important;
+      box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4), 0 1px 3px rgba(0, 0, 0, 0.15) !important;
+      cursor: pointer !important;
+      display: flex !important;
+      align-items: center !important;
+      justify-content: center !important;
+      z-index: 2147483647 !important;
+      transition: transform 0.15s ease, box-shadow 0.15s ease !important;
+      padding: 0 !important;
+    }
+    #${PARAGRAPH_CONTROL_ID}:hover {
+      transform: scale(1.1) !important;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.5), 0 2px 4px rgba(0, 0, 0, 0.2) !important;
+    }
+    #${PARAGRAPH_CONTROL_ID}:active {
+      transform: scale(0.95) !important;
+    }
+    #${PARAGRAPH_CONTROL_ID} svg {
+      width: 14px !important;
+      height: 14px !important;
+      fill: white !important;
     }
     #${PLAY_OVERLAY_ID} {
       position: fixed !important;
@@ -93,14 +126,24 @@ function injectHighlightStyles() {
  * Highlight a specific element
  */
 function highlightElement(element) {
-  // Remove previous highlight
+  // Remove previous highlight and control button
   if (currentHighlightedElement) {
     currentHighlightedElement.classList.remove(HIGHLIGHT_CLASS);
+    removeParagraphControl();
   }
   
   if (element) {
+    // Ensure element has position for absolute positioning of control button
+    const computedStyle = window.getComputedStyle(element);
+    if (computedStyle.position === 'static') {
+      element.style.position = 'relative';
+    }
+    
     element.classList.add(HIGHLIGHT_CLASS);
     currentHighlightedElement = element;
+    
+    // Add pause/play control button
+    showParagraphControl(element);
     
     // Scroll element into view smoothly
     element.scrollIntoView({
@@ -119,6 +162,74 @@ function removeHighlight() {
     currentHighlightedElement.classList.remove(HIGHLIGHT_CLASS);
     currentHighlightedElement = null;
   }
+  removeParagraphControl();
+}
+
+/**
+ * Get the SVG icon for pause or play
+ */
+function getPauseIcon() {
+  return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><rect x="6" y="4" width="4" height="16"/><rect x="14" y="4" width="4" height="16"/></svg>';
+}
+
+function getPlayIcon() {
+  return '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M8 5v14l11-7z"/></svg>';
+}
+
+/**
+ * Show pause/play control button on the highlighted element
+ */
+function showParagraphControl(element) {
+  removeParagraphControl();
+  
+  const button = document.createElement('button');
+  button.id = PARAGRAPH_CONTROL_ID;
+  button.innerHTML = isPaused ? getPlayIcon() : getPauseIcon();
+  button.title = isPaused ? 'Resume' : 'Pause';
+  
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    toggleParagraphPlayback();
+  });
+  
+  element.appendChild(button);
+  paragraphControlButton = button;
+}
+
+/**
+ * Remove the paragraph control button
+ */
+function removeParagraphControl() {
+  if (paragraphControlButton) {
+    paragraphControlButton.remove();
+    paragraphControlButton = null;
+  }
+  // Also try to remove by ID in case reference was lost
+  const existing = document.getElementById(PARAGRAPH_CONTROL_ID);
+  if (existing) existing.remove();
+}
+
+/**
+ * Update the paragraph control button icon based on pause state
+ */
+function updateParagraphControlIcon() {
+  if (paragraphControlButton) {
+    paragraphControlButton.innerHTML = isPaused ? getPlayIcon() : getPauseIcon();
+    paragraphControlButton.title = isPaused ? 'Resume' : 'Pause';
+  }
+}
+
+/**
+ * Toggle playback from paragraph control button
+ */
+function toggleParagraphPlayback() {
+  if (isPaused) {
+    resumePlayback();
+  } else {
+    pausePlayback();
+  }
+  updateParagraphControlIcon();
 }
 
 /**
@@ -740,6 +851,7 @@ function pausePlayback() {
   if (currentAudio && !isPaused) {
     currentAudio.pause();
     isPaused = true;
+    updateParagraphControlIcon();
     notifyExtension({ action: 'paused' });
   }
 }
@@ -754,6 +866,7 @@ function resumePlayback() {
       notifyExtension({ action: 'error', text: 'Failed to resume playback' });
     });
     isPaused = false;
+    updateParagraphControlIcon();
     notifyExtension({ action: 'resumed' });
   }
 }
