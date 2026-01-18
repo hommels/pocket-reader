@@ -2,10 +2,71 @@
  * Pocket Reader - Background Service Worker
  * Coordinates between popup and content scripts
  * Handles keyboard shortcuts
+ * Proxies TTS API requests to bypass page CSP restrictions
  */
+
+const SERVER_URL = 'http://localhost:5050';
 
 // State tracking
 let activeTabId = null;
+
+/**
+ * Handle TTS API proxy requests from content scripts
+ * This bypasses page CSP restrictions since background scripts have host_permissions
+ */
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'synthesize') {
+    // Proxy synthesize request to TTS server
+    (async () => {
+      try {
+        const response = await fetch(`${SERVER_URL}/synthesize`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: message.text, voice: message.voice }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          sendResponse({ error: error.error || 'Server error' });
+          return;
+        }
+
+        const contentType = response.headers.get('content-type') || 'audio/wav';
+        const blob = await response.blob();
+        const arrayBuffer = await blob.arrayBuffer();
+
+        sendResponse({ audioData: Array.from(new Uint8Array(arrayBuffer)), contentType });
+      } catch (error) {
+        sendResponse({ error: error.message || 'Network error' });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+
+  if (message.action === 'getParagraphs') {
+    // Proxy paragraphs request to TTS server
+    (async () => {
+      try {
+        const response = await fetch(`${SERVER_URL}/paragraphs`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ text: message.text }),
+        });
+
+        if (!response.ok) {
+          sendResponse({ error: 'Failed to split text into paragraphs' });
+          return;
+        }
+
+        const data = await response.json();
+        sendResponse({ paragraphs: data.paragraphs });
+      } catch (error) {
+        sendResponse({ error: error.message || 'Network error' });
+      }
+    })();
+    return true; // Keep channel open for async response
+  }
+});
 
 /**
  * Forward stop command to the active tab's content script

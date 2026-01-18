@@ -2,9 +2,8 @@
  * Pocket Reader - Content Script
  * Extracts main content from web pages and handles audio playback
  * Uses prefetching to generate next paragraph while current one plays
+ * TTS API requests are proxied through the background script to bypass page CSP
  */
-
-const SERVER_URL = 'http://localhost:5050';
 
 // Audio playback state
 let currentAudio = null;
@@ -324,38 +323,51 @@ function playAudioBlob(audioBlob, onReadyToPrefetch) {
 
 /**
  * Synthesize a single paragraph - returns a promise for the audio blob
+ * Proxied through background script to bypass page CSP restrictions
  */
 async function synthesizeParagraph(text, voice) {
-  const response = await fetch(`${SERVER_URL}/synthesize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text, voice }),
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { action: 'synthesize', text, voice },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (response.error) {
+          reject(new Error(response.error));
+          return;
+        }
+        // Convert array back to Blob
+        const uint8Array = new Uint8Array(response.audioData);
+        const blob = new Blob([uint8Array], { type: response.contentType });
+        resolve(blob);
+      }
+    );
   });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error || 'Server error');
-  }
-
-  return await response.blob();
 }
 
 /**
  * Get paragraphs from server
+ * Proxied through background script to bypass page CSP restrictions
  */
 async function getParagraphs(text) {
-  const response = await fetch(`${SERVER_URL}/paragraphs`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ text }),
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage(
+      { action: 'getParagraphs', text },
+      (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+          return;
+        }
+        if (response.error) {
+          reject(new Error(response.error));
+          return;
+        }
+        resolve(response.paragraphs);
+      }
+    );
   });
-
-  if (!response.ok) {
-    throw new Error('Failed to split text into paragraphs');
-  }
-
-  const data = await response.json();
-  return data.paragraphs;
 }
 
 /**
