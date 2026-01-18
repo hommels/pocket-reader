@@ -11,7 +11,7 @@
   ],
   "browser_specific_settings": {
     "gecko": {
-      "id": "pocket-reader@example.com",
+      "id": "pocket-reader",
       "strict_min_version": "146.0"
     }
   },
