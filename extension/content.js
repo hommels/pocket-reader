@@ -14,6 +14,10 @@ let currentParagraphIndex = 0;
 let totalParagraphs = 0;
 let pendingAudioUrls = []; // Track URLs to clean up on stop
 
+// Pending playback state for autoplay policy retry
+let pendingPlayback = null; // { audioBlob, onReadyToPrefetch, resolve, reject }
+let playOverlayElement = null;
+
 // DOM element tracking for highlighting
 let readableElements = []; // Array of DOM elements that can be read
 let currentHighlightedElement = null;
@@ -21,13 +25,14 @@ let currentHighlightedElement = null;
 // CSS class for highlighting
 const HIGHLIGHT_CLASS = 'pocket-reader-highlight';
 const HIGHLIGHT_STYLE_ID = 'pocket-reader-styles';
+const PLAY_OVERLAY_ID = 'pocket-reader-play-overlay';
 
 /**
  * Inject highlight styles into the page
  */
 function injectHighlightStyles() {
   if (document.getElementById(HIGHLIGHT_STYLE_ID)) return;
-  
+
   const style = document.createElement('style');
   style.id = HIGHLIGHT_STYLE_ID;
   style.textContent = `
@@ -37,6 +42,48 @@ function injectHighlightStyles() {
       outline-offset: 2px !important;
       border-radius: 4px !important;
       transition: background-color 0.2s ease, outline 0.2s ease !important;
+    }
+    #${PLAY_OVERLAY_ID} {
+      position: fixed !important;
+      top: 50% !important;
+      left: 50% !important;
+      transform: translate(-50%, -50%) !important;
+      z-index: 2147483647 !important;
+      background: linear-gradient(135deg, #6366f1 0%, #4f46e5 100%) !important;
+      color: white !important;
+      border: none !important;
+      border-radius: 16px !important;
+      padding: 20px 32px !important;
+      font-size: 18px !important;
+      font-weight: 600 !important;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif !important;
+      cursor: pointer !important;
+      box-shadow: 0 8px 32px rgba(99, 102, 241, 0.4), 0 4px 12px rgba(0, 0, 0, 0.15) !important;
+      display: flex !important;
+      align-items: center !important;
+      gap: 12px !important;
+      transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+    }
+    #${PLAY_OVERLAY_ID}:hover {
+      transform: translate(-50%, -50%) scale(1.05) !important;
+      box-shadow: 0 12px 40px rgba(99, 102, 241, 0.5), 0 6px 16px rgba(0, 0, 0, 0.2) !important;
+    }
+    #${PLAY_OVERLAY_ID}:active {
+      transform: translate(-50%, -50%) scale(0.98) !important;
+    }
+    #${PLAY_OVERLAY_ID} svg {
+      width: 24px !important;
+      height: 24px !important;
+      fill: currentColor !important;
+    }
+    #pocket-reader-overlay-backdrop {
+      position: fixed !important;
+      top: 0 !important;
+      left: 0 !important;
+      width: 100vw !important;
+      height: 100vh !important;
+      background: rgba(0, 0, 0, 0.3) !important;
+      z-index: 2147483646 !important;
     }
   `;
   document.head.appendChild(style);
@@ -72,6 +119,123 @@ function removeHighlight() {
     currentHighlightedElement.classList.remove(HIGHLIGHT_CLASS);
     currentHighlightedElement = null;
   }
+}
+
+/**
+ * Show a "Click to Start Reading" overlay when autoplay is blocked
+ * The overlay provides a user gesture that allows audio playback
+ */
+function showPlayOverlay() {
+  // Inject styles first
+  injectHighlightStyles();
+  
+  // Remove existing overlay if any
+  removePlayOverlay();
+  
+  // Create backdrop
+  const backdrop = document.createElement('div');
+  backdrop.id = 'pocket-reader-overlay-backdrop';
+  document.body.appendChild(backdrop);
+  
+  // Create button
+  const button = document.createElement('button');
+  button.id = PLAY_OVERLAY_ID;
+  button.innerHTML = `
+    <svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 5v14l11-7z"/>
+    </svg>
+    Click to Start Reading
+  `;
+  
+  button.addEventListener('click', handlePlayOverlayClick);
+  backdrop.addEventListener('click', (e) => {
+    if (e.target === backdrop) {
+      // Clicked outside button - cancel playback
+      removePlayOverlay();
+      if (pendingPlayback) {
+        pendingPlayback.reject(new Error('Playback cancelled by user'));
+        pendingPlayback = null;
+      }
+      stopPlayback();
+    }
+  });
+  
+  document.body.appendChild(button);
+  playOverlayElement = button;
+}
+
+/**
+ * Remove the play overlay
+ */
+function removePlayOverlay() {
+  const overlay = document.getElementById(PLAY_OVERLAY_ID);
+  const backdrop = document.getElementById('pocket-reader-overlay-backdrop');
+  if (overlay) overlay.remove();
+  if (backdrop) backdrop.remove();
+  playOverlayElement = null;
+}
+
+/**
+ * Handle click on the play overlay - this provides the user gesture needed for audio
+ */
+function handlePlayOverlayClick() {
+  removePlayOverlay();
+  
+  if (!pendingPlayback) return;
+  
+  const { audioBlob, onReadyToPrefetch, resolve, reject } = pendingPlayback;
+  pendingPlayback = null;
+  
+  // Now we have a valid user gesture - retry playback
+  retryPlayAudioBlob(audioBlob, onReadyToPrefetch, resolve, reject);
+}
+
+/**
+ * Retry audio playback after user gesture (called from overlay click)
+ */
+function retryPlayAudioBlob(audioBlob, onReadyToPrefetch, resolve, reject) {
+  const audioUrl = URL.createObjectURL(audioBlob);
+  pendingAudioUrls.push(audioUrl);
+  
+  currentAudio = new Audio(audioUrl);
+  currentAudio.playbackRate = playbackSpeed;
+  
+  let prefetchTriggered = false;
+  
+  currentAudio.ontimeupdate = () => {
+    if (
+      !prefetchTriggered &&
+      currentAudio &&
+      currentAudio.duration &&
+      currentAudio.currentTime / currentAudio.duration >= 0.7
+    ) {
+      prefetchTriggered = true;
+      if (onReadyToPrefetch) {
+        onReadyToPrefetch();
+      }
+    }
+  };
+  
+  currentAudio.onended = () => {
+    URL.revokeObjectURL(audioUrl);
+    pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
+    currentAudio = null;
+    resolve({ stopped: false });
+  };
+  
+  currentAudio.onerror = () => {
+    URL.revokeObjectURL(audioUrl);
+    pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
+    currentAudio = null;
+    reject(new Error('Audio playback error'));
+  };
+  
+  currentAudio.play().catch((error) => {
+    URL.revokeObjectURL(audioUrl);
+    pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
+    currentAudio = null;
+    reject(error);
+  });
 }
 
 /**
@@ -316,6 +480,21 @@ function playAudioBlob(audioBlob, onReadyToPrefetch) {
       URL.revokeObjectURL(audioUrl);
       pendingAudioUrls = pendingAudioUrls.filter((u) => u !== audioUrl);
       currentAudio = null;
+      
+      // Check if this is an autoplay policy error
+      if (error.name === 'NotAllowedError') {
+        // Store pending playback state and show overlay for user gesture
+        pendingPlayback = {
+          audioBlob,
+          onReadyToPrefetch,
+          resolve,
+          reject
+        };
+        showPlayOverlay();
+        // Don't reject yet - wait for user to click overlay
+        return;
+      }
+      
       reject(error);
     });
   });
@@ -543,6 +722,10 @@ function stopPlayback() {
     URL.revokeObjectURL(url);
   }
   pendingAudioUrls = [];
+
+  // Clear pending playback state and remove overlay
+  pendingPlayback = null;
+  removePlayOverlay();
 
   // Remove highlight
   removeHighlight();
