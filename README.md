@@ -1,6 +1,6 @@
 # Pocket Reader
 
-A Chrome extension that reads web page content aloud using [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) - a lightweight text-to-speech model that runs on your CPU.
+A browser extension that reads web page content aloud using [Pocket TTS](https://github.com/kyutai-labs/pocket-tts) - a lightweight text-to-speech model that runs on your CPU.
 
 ![](./images/demo.png)
 
@@ -35,7 +35,7 @@ pocket-reader/
 
 - Python 3.10 or later
 - [UV](https://docs.astral.sh/uv/) package manager
-- Chrome or Chromium-based browser
+- Firefox 146+ or Chrome/Chromium-based browser
 
 ## Setup
 
@@ -61,12 +61,20 @@ The server will:
 - Preload the default voice
 - Listen on http://localhost:5050
 
-### 3. Install the Chrome Extension
+### 3. Install the Browser Extension
 
+**For Chrome/Chromium**:
 1. Open Chrome and go to `chrome://extensions/`
 2. Enable "Developer mode" (toggle in top right)
 3. Click "Load unpacked"
 4. Select the `extension` folder from this project
+
+**For Firefox**:
+1. Open Firefox and go to `about:debugging#/runtime/this-firefox`
+2. Click "Load Temporary Add-on..."
+3. Navigate to the `extension` folder and select `manifest.json`
+
+**Note**: For permanent Firefox installation, package as XPI or submit to addons.mozilla.org
 
 ## Usage
 
